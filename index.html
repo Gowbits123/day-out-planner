@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
 <title>Day-Out Planner – Chennai (Cloud Sync)</title>
 <style>
   :root{--brand:#ff5722;--accent:#0088cc;--bg:#fff8ef}
@@ -51,6 +52,53 @@
   .chip.active{outline:2px solid var(--accent); outline-offset:1px}
   .chip .dot{width:.6rem;height:.6rem}
   .cal-help{font-size:.9rem;color:#555}
+/* ── Mobile-friendly tweaks ───────────────────────────────────────── */
+
+/* Better touch targets */
+button { min-height: 40px; }
+button.icon { width: 36px; height: 36px; padding: 0; }
+
+/* Header/nav wraps nicely on small screens */
+header { gap: .5rem; }
+header h1 { font-size: 1.15rem; }
+nav { display: flex; flex-wrap: wrap; gap: .4rem; }
+nav button { padding: .5rem .8rem; }
+
+/* Profiles layout stacks on narrow widths */
+.profile-container { gap: .75rem; }
+.profile-card { flex: 1 1 100%; } /* full width on mobile */
+
+/* Map adapts to viewport height */
+.map-wrap { height: 48vh; min-height: 220px; }
+@media (min-width: 900px) {
+  .map-wrap { height: 420px; }
+}
+
+/* Voting table scrolls horizontally if needed */
+#votingContent { overflow-x: auto; }
+#votingContent table { min-width: 560px; }
+
+/* Calendar grid stays readable on phones */
+.cal-grid {
+  grid-template-columns: repeat(7, minmax(38px, 1fr));
+  gap: .35rem;
+}
+.cal-day { min-height: 72px; padding: .35rem; }
+.cal-day .date-no { font-size: .9rem; }
+.badge { top: .25rem; right: .25rem; font-size: .7rem; padding: .02rem .3rem; }
+.legend { gap: .4rem; }
+.chip { padding: .25rem .5rem; }
+
+/* Tighten fonts a touch on very small screens */
+@media (max-width: 420px) {
+  body { font-size: 15px; }
+  .cal-title { font-size: 1rem; }
+  .chip { font-size: .9rem; }
+}
+
+/* Give main content some safe breathing room */
+main { padding: .75rem; }
+
 </style>
 </head>
 <body>
