@@ -270,28 +270,36 @@ function cnt(o,val){ return Object.values(o).filter(x=>x===val).length; }
 let calCurrent = new Date();
 let activeEditor = null;
 
-function renderCalendarUI(){
+function renderCalendarUI( ){
   if(!activeEditor) activeEditor = state.profiles[0] ? state.profiles[0].id : null;
 
-  const leg = document.getElementById("calLegend"); leg.innerHTML="";
+  const leg = document.getElementById('calLegend');
+  leg.innerHTML = '';
   state.profiles.forEach(p=>{
-    const chip=document.createElement("span"); chip.className="chip"+(activeEditor===p.id?" active":"");
-    const d=document.createElement("span"); d.className="dot"; d.style.background=colour(p.id);
+    const chip = document.createElement('span');
+    chip.className = 'chip' + (activeEditor===p.id ? ' active' : '');
+    chip.dataset.pid = p.id; // ← important
+    const d = document.createElement('span'); d.className='dot'; d.style.background = colour(p.id);
     chip.appendChild(d);
-    chip.appendChild(document.createTextNode(" "+p.name));
-    chip.onclick = function () {
-      activeEditor = p.id;
-      // update label
-      const label = document.getElementById('calEditWho');
-      if (label) label.textContent = 'Editing: ' + profileName(activeEditor);
-      // toggle active class on chips
-      document.querySelectorAll('#calLegend .chip').forEach(function(el){ el.classList.remove('active'); });
-      chip.classList.add('active');
-      // redraw
-      drawCalendar();
-    };
+    chip.appendChild(document.createTextNode(' ' + p.name));
     leg.appendChild(chip);
   });
+
+  // SINGLE delegated click handler (idempotent)
+  leg.onclick = (e)=>{
+    const chip = e.target.closest('.chip');
+    if(!chip) return;
+    activeEditor = chip.dataset.pid;
+
+    const label = document.getElementById('calEditWho');
+    if (label) label.textContent = 'Editing: ' + profileName(activeEditor);
+
+    // toggle active class
+    leg.querySelectorAll('.chip').forEach(el=>el.classList.remove('active'));
+    chip.classList.add('active');
+
+    drawCalendar();
+  };
 
   const label = document.getElementById('calEditWho');
   if (label) label.textContent = activeEditor ? ('Editing: ' + profileName(activeEditor)) : '';
@@ -381,12 +389,14 @@ function formatDate(d){ return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d
 function drawUI(){
   renderProfiles();
   renderVoting();
-  // NEW: if calendar tab is visible, refresh it too
   const calTab = document.getElementById('tab-calendar');
   if (calTab && !calTab.classList.contains('hidden')) {
-    renderCalendarUI();
+    // Only redraw the grid; keep legend selection & handlers intact
+    drawCalendar();
   }
 }
+
+
 window.initMap = async function(){
   try { mapSetup(); await cloudLoad(); drawUI(); }
   catch(e){ console.error(e); }
