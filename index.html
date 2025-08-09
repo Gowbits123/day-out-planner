@@ -202,10 +202,12 @@ async function claimProfile(pid){
     if(!pin) return;
     if(!p.pin || pin !== p.pin) return alert('Incorrect PIN');
   } else if(p.claimedBy===uid){
-    myPid = pid; saveMyPid(); updateWho(); renderProfiles(); renderVoting(); renderCalendarUI(); renderCommentLegend(); return;
+    // already yours → just select it
+    selectMyProfile(pid);
+    return;
   } else {
     if(!p.pin){
-      const pin = prompt(`Set a PIN for "${p.name}" (4-10 chars):`);
+      const pin = prompt(`Set a PIN for "${p.name}" (4–10 chars):`);
       if(!pin || pin.length<4) return alert('PIN too short.');
       p.pin = pin;
     } else {
@@ -214,14 +216,25 @@ async function claimProfile(pid){
     }
   }
   p.claimedBy = uid;
-  myPid = pid; saveMyPid();
   await cloudSave();
-  updateWho(); renderProfiles(); renderVoting(); renderCalendarUI(); renderCommentLegend();
+  selectMyProfile(pid);
 }
+
+/* NEW: select without prompting (used when you already own it) */
+function selectMyProfile(pid){
+  myPid = pid;
+  saveMyPid();
+  updateWho();
+  renderProfiles();
+  renderVoting();
+  if (!document.getElementById('tab-calendar').classList.contains('hidden')) drawCalendar();
+  if (!document.getElementById('tab-comments').classList.contains('hidden')) renderCommentLegend();
+}
+
 async function setOrChangePin(pid){
   const p = profileById(pid); if(!p) return;
   if(p.claimedBy && p.claimedBy!==uid) return alert('Only the current owner can change the PIN.');
-  const pin = prompt(`Set/Change PIN for "${p.name}" (4-10 chars):`, p.pin||'');
+  const pin = prompt(`Set/Change PIN for "${p.name}" (4–10 chars):`, p.pin||'');
   if(!pin || pin.length<4) return alert('PIN too short.');
   p.pin = pin;
   if(!p.claimedBy) p.claimedBy = uid;
@@ -266,11 +279,16 @@ function renderProfiles(){
     const owned = iOwn(p.id);
     const card=document.createElement('div'); card.className='profile-card'; card.id=p.id;
     card.style.borderColor = colour(p.id);
+
+    const useOrClaimBtn = owned
+      ? `<button onclick="selectMyProfile('${p.id}')">Use on this device</button>`
+      : `<button onclick="claimProfile('${p.id}')" style="background:#4caf50">Claim this profile</button>`;
+
     card.innerHTML=`
       <button class="delete-profile" onclick="deleteProfile('${p.id}')">×</button>
       <h3>${p.name}</h3>
       <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.5rem">
-        <button onclick="claimProfile('${p.id}')" ${owned?'':'style="background:#4caf50"'}>${owned?'Use on this device':'Claim this profile'}</button>
+        ${useOrClaimBtn}
         <button onclick="setOrChangePin('${p.id}')" class="${owned?'':'lock'}">Set/Change PIN</button>
       </div>
       <label>Start <input id="${p.id}-start" value="${p.start||''}" ${owned?'':'disabled'}></label><br/>
@@ -386,10 +404,11 @@ function renderCalendarUI(){
     chip.appendChild(d); chip.appendChild(document.createTextNode(' '+p.name));
     leg.appendChild(chip);
   });
+  // Delegated handler: select if owner, otherwise prompt to claim
   leg.onclick = (e)=>{
     const chip=e.target.closest('.chip'); if(!chip) return;
     const pid=chip.dataset.pid;
-    if(iOwn(pid)) { myPid=pid; saveMyPid(); updateWho(); drawCalendar(); highlightLegend('calLegend'); return; }
+    if(iOwn(pid)) { selectMyProfile(pid); highlightLegend('calLegend'); return; }
     claimProfile(pid);
   };
 
@@ -487,7 +506,7 @@ function renderCommentLegend(){
   leg.onclick = (e)=>{
     const chip=e.target.closest('.chip'); if(!chip) return;
     const pid=chip.dataset.pid;
-    if(iOwn(pid)) { myPid=pid; saveMyPid(); updateWho(); highlightLegend('commentLegend'); return; }
+    if(iOwn(pid)) { selectMyProfile(pid); highlightLegend('commentLegend'); return; }
     claimProfile(pid);
   };
   highlightLegend('commentLegend');
@@ -531,7 +550,8 @@ window.initMap = async function(){ try { mapSetup(); await cloudLoad(); drawUI()
 /* Expose globals */
 Object.assign(window,{
   addProfile:addProfile, addStop:addStop, drawRoute:drawRoute, deleteProfile:deleteProfile, switchTab:switchTab,
-  toggleVote:toggleVote, calNav:calNav, claimProfile:claimProfile, setOrChangePin:setOrChangePin, sendComment:sendComment
+  toggleVote:toggleVote, calNav:calNav, claimProfile:claimProfile, setOrChangePin:setOrChangePin,
+  sendComment:sendComment, selectMyProfile:selectMyProfile
 });
 </script>
 
