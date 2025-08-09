@@ -35,7 +35,7 @@
 
   #votingContent{overflow-x:auto}
   #votingContent table{width:100%;min-width:560px;border-collapse:collapse}
-  #votingContent th,#votingContent td{border:1px solid #ddd;padding:.4rem;text-align:left}
+  #votingContent th,#votingContent td{border:1px solid #ddd;padding:.4rem;text-align:left;vertical-align:top}
   #votingContent th{background:#ffe5d1}
 
   /* Calendar */
@@ -44,16 +44,15 @@
   .cal-title{font-weight:800;color:var(--accent)}
   .cal-grid{display:grid;grid-template-columns:repeat(7,minmax(38px,1fr));gap:.35rem}
   .cal-dow{font-size:.85rem;color:#666;text-align:center}
-  .cal-day{background:#fff8ef;border:1px solid #f1d5c0;border-radius:.75rem;min-height:72px;padding:.35rem;display:flex;flex-direction:column;gap:.35rem;cursor:pointer;position:relative}
+  .cal-day{background:#fff8ef;border:1px solid #f1d5c0;border-radius:.75rem;min-height:80px;padding:.35rem;display:flex;flex-direction:column;gap:.35rem;cursor:pointer;position:relative}
   .cal-day.other-month{opacity:.45}
   .cal-day .date-no{font-weight:700;color:#444;font-size:.9rem}
-  .cal-day .dots{display:flex;flex-wrap:wrap;gap:.25rem;margin-top:auto}
-  .dot{width:.7rem;height:.7rem;border-radius:50%;border:1px solid rgba(0,0,0,.15)}
+  .cal-day .tags{display:flex;flex-wrap:wrap;gap:.25rem;margin-top:auto}
+  .tag{font-size:.72rem;line-height:1;background:#fff;border:1px solid #e4c9b3;border-radius:.6rem;padding:.12rem .35rem;white-space:nowrap}
   .badge{position:absolute;top:.25rem;right:.25rem;min-width:1.2rem;padding:.02rem .3rem;border-radius:1rem;background:#ffe5d1;border:1px solid #f1d5c0;text-align:center;font-size:.7rem;color:#555}
   .legend{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.75rem}
   .chip{display:inline-flex;align-items:center;gap:.35rem;padding:.25rem .5rem;border:1px solid #ddd;background:#fff;border-radius:1rem;cursor:pointer}
   .chip.active{outline:2px solid var(--accent); outline-offset:1px}
-  .chip .dot{width:.6rem;height:.6rem}
   .cal-help{font-size:.9rem;color:#555}
   .chip.lock{opacity:.5;cursor:not-allowed}
 
@@ -65,6 +64,14 @@
   .meta{font-size:.75rem;color:#666;margin-top:.15rem}
   .chat-input{display:flex;gap:.5rem}
   .chat-input input{flex:1;padding:.5rem;border:1px solid #ccc;border-radius:.5rem}
+
+  /* Suggestions */
+  .sugg-wrap{background:#fff;border:2px solid var(--accent);border-radius:1rem;padding:1rem;display:flex;flex-direction:column;gap:.75rem}
+  .sugg-input{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+  .sugg-input input{flex:1;min-width:220px;padding:.5rem;border:1px solid #ccc;border-radius:.5rem}
+  .sugg-list{display:flex;flex-direction:column;gap:.5rem;max-height:50vh;overflow:auto}
+  .sugg-item{display:flex;justify-content:space-between;align-items:flex-start;gap:.75rem;border:1px solid #eee;border-radius:.75rem;padding:.5rem .6rem;background:#fff8ef}
+  .sugg-item small{color:#666}
 
   /* Extra small screens */
   @media (max-width:420px){
@@ -81,6 +88,7 @@
   <h1>Day-Out Planner – Chennai</h1>
   <nav>
     <button id="btnProfiles" class="active" onclick="switchTab('profiles')">Profiles</button>
+    <button id="btnSuggestions" onclick="switchTab('suggestions')">Suggestions</button>
     <button id="btnVoting"  onclick="switchTab('voting')">Voting</button>
     <button id="btnCalendar" onclick="switchTab('calendar')">Calendar</button>
     <button id="btnComments" onclick="switchTab('comments')">Comments</button>
@@ -92,16 +100,29 @@
 <main>
   <section id="tab-profiles"><div id="profilesArea" class="profile-container"></div></section>
 
+  <!-- Suggestions Tab -->
+  <section id="tab-suggestions" class="hidden">
+    <h2>Suggestions</h2>
+    <p class="cal-help">Search with Google and stash good places here. The Voting tab uses this list (deduped).</p>
+    <div class="sugg-wrap">
+      <div class="sugg-input">
+        <input id="suggSearch" placeholder="Search places… (e.g., Marina Beach, Murugan Idli)" />
+        <button onclick="addSuggestion()">Add</button>
+      </div>
+      <div class="sugg-list" id="suggList"></div>
+    </div>
+  </section>
+
   <section id="tab-voting" class="hidden">
     <h2>Group Voting</h2>
-    <p>Vote only for your own profile. Others are locked unless you claim with a PIN.</p>
+    <p>Voting is based on the <strong>Suggestions</strong> list below. Vote only for your own profile.</p>
     <div id="votingContent"></div>
   </section>
 
   <!-- Calendar Tab -->
   <section id="tab-calendar" class="hidden">
     <h2>Availability Calendar</h2>
-    <p class="cal-help">Everyone’s availability is visible. You can edit only your claimed profile (or claim another with its PIN).</p>
+    <p class="cal-help">Everyone’s availability is visible. Tap a date to toggle for <em>your</em> profile.</p>
     <div class="calendar-wrap">
       <div class="cal-toolbar">
         <div>
@@ -154,14 +175,17 @@ const app = initializeApp(firebaseConfig);
 const db  = getFirestore(app);
 const auth = getAuth(app);
 const globalRef = doc(db,"planner","global");
-const commentsCol = collection(globalRef, "comments");
+const commentsCol    = collection(globalRef, "comments");     // existing subcollection
+const suggestionsCol = collection(globalRef, "suggestions");  // NEW subcollection
+
 /* State */
 let uid = null;
 let state = { profiles: [], votes: {}, avails: {}, owners: {} };
 let myPid = null;
+let suggestions = []; // live cache of /planner/global/suggestions
 const CHENNAI = {lat:13.0827,lng:80.2707};
 
-/* Colors — persisted per profile (no collisions) */
+/* Colours may still be used in cards etc. */
 function paletteHueAt(i,total){ return Math.round((i * 360/Math.max(total,1)) % 360); }
 function colour(pid){ const p = profileById(pid); return p?.color || 'hsl(0,0%,80%)'; }
 
@@ -171,8 +195,13 @@ const formatDate = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDa
 const stopsOf = pid => [...document.querySelectorAll(`#${pid}-list li`)].map(li=>li.firstChild.nodeValue.trim());
 function profileById(pid){ return state.profiles.find(p=>p.id===pid); }
 function profileName(pid){ return profileById(pid)?.name || 'Unknown'; }
+function initials(name){
+  if(!name) return '?';
+  const parts = name.trim().split(/\s+/).slice(0,3);
+  return parts.map(w=>w[0]?.toUpperCase()).join('');
+}
 
-/* ---- Multi-device with PIN; one-device-one-profile lock ---- */
+/* ---- Claim / PIN / device lock (unchanged) ---- */
 const DEVICE_LOCK_KEY = 'deviceClaimedPid';
 const getDeviceClaimedPid = () => { try { return localStorage.getItem(DEVICE_LOCK_KEY); } catch { return null; } };
 const setDeviceClaimedPid = (pid) => { try { localStorage.setItem(DEVICE_LOCK_KEY, pid); } catch {} };
@@ -181,10 +210,10 @@ const clearDeviceClaimIf = (pid) => { try { if (localStorage.getItem(DEVICE_LOCK
 function ownersOf(pid){
   const p = profileById(pid);
   if (!p) return [];
-  if (!p.owners && p.claimedBy) p.owners = [p.claimedBy]; // migrate legacy
+  if (!p.owners && p.claimedBy) p.owners = [p.claimedBy];
   if (!Array.isArray(p.owners)) p.owners = [];
   if (!state.owners) state.owners = {};
-  state.owners[pid] = p.owners; // mirror for Rules
+  state.owners[pid] = p.owners;
   return p.owners;
 }
 function iOwn(pid){ return ownersOf(pid).includes(uid); }
@@ -198,7 +227,6 @@ onAuthStateChanged(auth, async user=>{
   loadMyPid();
   await cloudLoad();
 
-  // Auto-select owned profile on load & bind device lock if missing
   if (!myPid) {
     const mine = state.profiles.find(p => ownersOf(p.id).includes(uid));
     if (mine) { myPid = mine.id; saveMyPid(); if (!getDeviceClaimedPid()) setDeviceClaimedPid(mine.id); }
@@ -206,9 +234,10 @@ onAuthStateChanged(auth, async user=>{
 
   drawUI();
   startCommentsLive();
+  startSuggestionsLive();
 });
 
-/* Firestore sync */
+/* Firestore sync (planner/global doc) */
 async function cloudLoad(){
   const s=await getDoc(globalRef);
   if(s.exists()){
@@ -220,7 +249,7 @@ async function cloudLoad(){
 const cloudSave = ()=> setDoc(globalRef,state);
 onSnapshot(globalRef,s=>{ if(s.exists()){ const d=s.data(); state={profiles:d.profiles||[],votes:d.votes||{},avails:d.avails||{}, owners:d.owners||{}}; ensureProfileColours(); drawUI(); }});
 
-/* Assign stable, unique colours (persist) */
+/* Profile colours persisted (used in non-calendar UI) */
 function ensureProfileColours(){
   let changed=false;
   const total = state.profiles.length;
@@ -230,13 +259,13 @@ function ensureProfileColours(){
   if(changed) cloudSave();
 }
 
-/* Claiming & PIN (multi-device allowed with PIN; one device => one profile) */
+/* Claim flow */
 async function claimProfile(pid){
   const p = profileById(pid); if(!p) return alert('Profile not found');
 
   const devicePid = getDeviceClaimedPid();
   if (devicePid && devicePid !== pid) {
-    alert(`This device is already tied to "${profileName(devicePid)}".\nOne device can use only one profile.`);
+    alert(`This device is already tied to "${profileName(devicePid)}". One device can use only one profile.`);
     return;
   }
 
@@ -265,19 +294,16 @@ async function claimProfile(pid){
   setDeviceClaimedPid(pid);
   selectMyProfile(pid);
 }
-
-/* Select without prompting; also apply device lock if empty */
 function selectMyProfile(pid){
-  myPid = pid;
-  saveMyPid();
+  myPid = pid; saveMyPid();
   if (!getDeviceClaimedPid()) setDeviceClaimedPid(pid);
   updateWho();
   renderProfiles();
   renderVoting();
   if (!document.getElementById('tab-calendar').classList.contains('hidden')) drawCalendar();
   if (!document.getElementById('tab-comments').classList.contains('hidden')) renderCommentLegend();
+  if (!document.getElementById('tab-suggestions').classList.contains('hidden')) renderSuggestions();
 }
-
 async function setOrChangePin(pid){
   const p = profileById(pid); if(!p) return;
   if(!iOwn(pid)) return alert('Only an existing owner can change the PIN.');
@@ -290,13 +316,14 @@ async function setOrChangePin(pid){
 
 /* Tabs */
 function switchTab(t){
-  ['profiles','voting','calendar','comments'].forEach(n=>{
+  ['profiles','suggestions','voting','calendar','comments'].forEach(n=>{
     document.getElementById('tab-'+n).classList.toggle('hidden',t!==n);
     document.getElementById('btn'+n.charAt(0).toUpperCase()+n.slice(1)).classList.toggle('active',t===n);
   });
   if(t==='voting') renderVoting();
   if(t==='calendar') renderCalendarUI();
   if(t==='comments') renderCommentLegend();
+  if(t==='suggestions') renderSuggestions();
 }
 function updateWho(){
   const el=document.getElementById('whoAmI');
@@ -369,7 +396,7 @@ function renderProfiles(){
   });
 }
 
-/* Stops (no alert during restore) */
+/* Stops (unchanged; personal routes, not voting) */
 function addStop(pid, val = '', silent = false){
   const isRestore = !!silent;
   if (!iOwn(pid) && !isRestore) { alert('Claim this profile to edit.'); return; }
@@ -388,7 +415,7 @@ function addStop(pid, val = '', silent = false){
   if (!isRestore) saveStops(pid);
 }
 const btn=(txt,fn)=>{const b=document.createElement('button');b.textContent=txt;b.className='icon';b.onclick=fn;return b;}
-const saveStops=pid=>{const p=profileById(pid); if(!p) return; p.stops=stopsOf(pid); cloudSave(); renderVoting();};
+const saveStops=pid=>{const p=profileById(pid); if(!p) return; p.stops=stopsOf(pid); cloudSave(); };
 
 /* Map */
 let map,svc,rend;
@@ -398,82 +425,149 @@ function mapSetup(){
   svc=new google.maps.DirectionsService();
   rend=new google.maps.DirectionsRenderer({map});
 }
-
-/* Anyone can view routes; owners write back */
 function drawRoute(pid){
   if(!(window.google?.maps && svc && rend)) return alert('Map not ready');
-
   const p = profileById(pid);
   if(!p) return alert('Profile not found');
-
   const start = p.start || document.getElementById(pid+'-start')?.value?.trim();
   const end   = p.end   || document.getElementById(pid+'-end')  ?.value?.trim();
   const stops = Array.isArray(p.stops) && p.stops.length ? p.stops : stopsOf(pid);
-
   if(!start || !end || !stops || !stops.length){
     return alert("This profile hasn't set start, end, and at least one stop yet.");
   }
-
   if(iOwn(pid)){ Object.assign(p, { start, end, stops }); cloudSave(); }
-
   svc.route({
-    origin: start,
-    destination: end,
-    waypoints: stops.map(s => ({ location: s, stopover: true })),
-    travelMode: 'DRIVING'
+    origin: start, destination: end,
+    waypoints: stops.map(s => ({ location: s, stopover: true })), travelMode: 'DRIVING'
   }, (res, status) => {
     if(status!=='OK') return alert('Directions failed: '+status);
     rend.setDirections(res);
     const legs = res.routes[0].legs;
     const dist = (legs.reduce((d,l)=>d+l.distance.value,0)/1000).toFixed(1);
     const time = (legs.reduce((t,l)=>t+l.duration.value,0)/60).toFixed(0);
-    document.getElementById('routeSummary').textContent =
-      `${p.name}'s plan → ${dist} km | ${time} mins`;
-    renderVoting();
+    document.getElementById('routeSummary').textContent = `${p.name}'s plan → ${dist} km | ${time} mins`;
   });
 }
 
-/* Voting */
+/* Suggestions live */
+let unsubscribeSuggestions = null;
+function startSuggestionsLive(){
+  if(unsubscribeSuggestions) unsubscribeSuggestions();
+  const q = query(suggestionsCol, orderBy('ts','desc'), limit(200));
+  unsubscribeSuggestions = colSnap(q, snap=>{
+    suggestions = [];
+    snap.forEach(d=>{ const s=d.data(); suggestions.push({ id:d.id, ...s }); });
+    if(!document.getElementById('tab-suggestions').classList.contains('hidden')) renderSuggestions();
+    if(!document.getElementById('tab-voting').classList.contains('hidden')) renderVoting();
+  });
+}
+
+let suggAC=null; // autocomplete instance
+function ensureSuggAutocomplete(){
+  if(suggAC || !window.google?.maps?.places) return;
+  const inp=document.getElementById('suggSearch');
+  if(!inp) return;
+  suggAC = new google.maps.places.Autocomplete(inp, {
+    fields:['place_id','name','formatted_address','geometry']
+  });
+}
+async function addSuggestion(){
+  ensureSuggAutocomplete();
+  const inp=document.getElementById('suggSearch');
+  if(!inp) return;
+  let place = suggAC?.getPlace?.();
+  // If user typed and hit Add without choosing dropdown, fallback to text
+  if(!place || !place.place_id){
+    const txt=inp.value.trim();
+    if(!txt) return;
+    const existsByName = suggestions.some(s => (s.name||'').toLowerCase()===txt.toLowerCase());
+    if(existsByName){ alert('Already suggested.'); return; }
+    await addDoc(suggestionsCol, {
+      placeId: `name:${txt.toLowerCase()}`,
+      name: txt,
+      address: '',
+      addedBy: myPid || 'anon',
+      uid, ts: serverTimestamp()
+    });
+    inp.value='';
+    return;
+  }
+  // Deduplicate by place_id
+  if(suggestions.some(s=>s.placeId===place.place_id)){
+    alert('Already suggested.');
+    inp.value=''; return;
+  }
+  await addDoc(suggestionsCol, {
+    placeId: place.place_id,
+    name: place.name || '',
+    address: place.formatted_address || '',
+    addedBy: myPid || 'anon',
+    uid,
+    ts: serverTimestamp()
+  });
+  inp.value='';
+}
+function renderSuggestions(){
+  ensureSuggAutocomplete();
+  const list=document.getElementById('suggList'); if(!list) return;
+  if(suggestions.length===0){ list.innerHTML='<em>No suggestions yet. Try adding a few!</em>'; return; }
+  list.innerHTML='';
+  suggestions.forEach(s=>{
+    const row=document.createElement('div'); row.className='sugg-item';
+    const left=document.createElement('div');
+    left.innerHTML = `<div><strong>${s.name||'(Unnamed)'}</strong></div>
+                      <small>${s.address||''}</small>
+                      <div><small>by ${profileName(s.addedBy)||'Someone'}</small></div>`;
+    row.appendChild(left);
+    list.appendChild(row);
+  });
+}
+
+/* Voting — now based on Suggestions (deduped by placeId) */
 function renderVoting(){
   const box=document.getElementById('votingContent');
-  if(state.profiles.length===0){box.innerHTML='<em>No profiles yet</em>';return;}
-  const places=[...new Set(state.profiles.flatMap(p=>p.stops||[]))];
-  if(places.length===0){box.innerHTML='<em>No stops to vote on</em>';return;}
-  let html='<table><thead><tr><th>Place</th>';
+  const uniqMap = new Map();
+  suggestions.forEach(s=>{ if(!uniqMap.has(s.placeId)) uniqMap.set(s.placeId, s); });
+  const uniq = [...uniqMap.values()];
+  if(uniq.length===0){ box.innerHTML='<em>No suggestions yet — add some in the Suggestions tab.</em>'; return; }
+
+  let html='<table><thead><tr><th style="min-width:220px">Place</th>';
   state.profiles.forEach(p=>html+=`<th>${p.name}</th>`); html+='<th>👍</th><th>👎</th></tr></thead><tbody>';
-  places.forEach(pl=>{
-    const row=state.votes[pl]||{};
-    html+=`<tr><td>${pl}</td>`;
+
+  uniq.forEach(s=>{
+    const key = s.placeId;
+    const row = state.votes[key] || {};
+    html+=`<tr><td><div><strong>${s.name}</strong></div><div><small>${s.address||''}</small></div></td>`;
     state.profiles.forEach(p=>{
       const up=row[p.id];
       const enabled = iOwn(p.id);
       html+=`<td style="text-align:center">
-                <button ${enabled?'':'disabled class="lock"'}
-                        onclick="toggleVote('${pl}','${p.id}')">${up?'👍':'👎'}</button>
-             </td>`;
+              <button ${enabled?'':'disabled class="lock"'} onclick="toggleVote('${key}','${p.id}')">
+                ${up?'👍':'👎'}
+              </button>
+            </td>`;
     });
     html+=`<td style="text-align:center">${cnt(row,true)}</td><td style="text-align:center">${cnt(row,false)}</td></tr>`;
   });
+
   html+='</tbody></table>'; box.innerHTML=html;
 }
-const toggleVote=(place,pid)=>{
+const toggleVote=(key,pid)=>{
   if(!iOwn(pid)) return alert('Claim this profile to vote for it.');
-  if(!state.votes[place]) state.votes[place]={};
-  state.votes[place][pid]=!state.votes[place][pid]; cloudSave(); renderVoting();
+  if(!state.votes[key]) state.votes[key]={};
+  state.votes[key][pid]=!state.votes[key][pid]; cloudSave(); renderVoting();
 };
 const cnt=(o,val)=>Object.values(o).filter(x=>x===val).length;
 
-/* Calendar (everyone visible; edit only your profile) */
+/* Calendar (names/initials instead of colours) */
 let calCurrent = new Date();
-
 function renderCalendarUI(){
   const leg = document.getElementById('calLegend'); leg.innerHTML='';
   state.profiles.forEach(p=>{
     const chip=document.createElement('span');
     chip.className='chip'+(myPid===p.id?' active':'')+(iOwn(p.id)?'':' lock');
     chip.dataset.pid = p.id;
-    const d=document.createElement('span'); d.className='dot'; d.style.background=colour(p.id);
-    chip.appendChild(d); chip.appendChild(document.createTextNode(' '+p.name));
+    chip.textContent = p.name;
     leg.appendChild(chip);
   });
   leg.onclick = (e)=>{
@@ -482,13 +576,9 @@ function renderCalendarUI(){
     if(iOwn(pid)) { selectMyProfile(pid); highlightLegend('calLegend'); return; }
     claimProfile(pid);
   };
-
   document.getElementById('calEditWho').textContent = myPid ? `Editing: ${profileName(myPid)}` : 'Not claimed';
-
-  drawCalendar();
-  highlightLegend('calLegend');
+  drawCalendar(); highlightLegend('calLegend');
 }
-
 function highlightLegend(containerId){
   const c=document.getElementById(containerId);
   c.querySelectorAll('.chip').forEach(el=>el.classList.remove('active'));
@@ -531,23 +621,28 @@ function makeDayCell(dateObj, otherMonth){
   const dateStr = formatDate(dateObj);
 
   const no=document.createElement('div'); no.className='date-no'; no.textContent = dateObj.getDate();
-  const dots=document.createElement('div'); dots.className='dots';
+  const tags=document.createElement('div'); tags.className='tags';
 
   const dayAv = state.avails?.[dateStr] || {};
   const freePids = Object.keys(dayAv).filter(pid=>dayAv[pid]);
-  freePids.forEach(pid=>{
-    const d=document.createElement('span'); d.className='dot'; d.title=profileName(pid);
-    d.style.background=colour(pid);
-    dots.appendChild(d);
-  });
 
+  freePids.slice(0,4).forEach(pid=>{
+    const t=document.createElement('span'); t.className='tag';
+    t.textContent = initials(profileName(pid));
+    t.title = profileName(pid);
+    tags.appendChild(t);
+  });
+  if(freePids.length>4){
+    const more=document.createElement('span'); more.className='tag'; more.textContent = `+${freePids.length-4}`;
+    tags.appendChild(more);
+  }
   if(freePids.length){
     const badge=document.createElement('div'); badge.className='badge'; badge.textContent=freePids.length;
     cell.appendChild(badge);
   }
 
   cell.appendChild(no);
-  cell.appendChild(dots);
+  cell.appendChild(tags);
 
   cell.onclick = ()=>{
     if(!myPid) return alert('Claim your profile first.');
@@ -562,7 +657,7 @@ function makeDayCell(dateObj, otherMonth){
   return cell;
 }
 
-/* Comments */
+/* Comments (owner-only posting; unchanged) */
 let unsubscribeComments = null;
 function renderCommentLegend(){
   const leg = document.getElementById('commentLegend'); leg.innerHTML='';
@@ -570,8 +665,7 @@ function renderCommentLegend(){
     const chip=document.createElement('span');
     chip.className='chip'+(myPid===p.id?' active':'')+(iOwn(p.id)?'':' lock');
     chip.dataset.pid=p.id;
-    const d=document.createElement('span'); d.className='dot'; d.style.background=colour(p.id);
-    chip.appendChild(d); chip.appendChild(document.createTextNode(' '+p.name));
+    chip.textContent = p.name;
     leg.appendChild(chip);
   });
   leg.onclick = (e)=>{
@@ -593,9 +687,10 @@ function startCommentsLive(){
     snap.forEach(docSnap=>{
       const m=docSnap.data();
       const row=document.createElement('div'); row.className='msg';
-      const avatar=document.createElement('span'); avatar.className='dot'; avatar.style.background = colour(m.profileId||'p0');
+      const avatar=document.createElement('span'); avatar.className='tag'; avatar.textContent = initials(profileName(m.profileId||'')) || '?';
       const bubble=document.createElement('div'); bubble.className='bubble';
-      bubble.innerHTML = `<div>${m.text||''}</div><div class="meta">${profileName(m.profileId||'')||'Unknown'} • ${m.ts?.toDate?.().toLocaleString?.()||''}</div>`;
+      const when = m.ts?.toDate?.()?.toLocaleString?.() || '';
+      bubble.innerHTML = `<div>${m.text||''}</div><div class="meta">${profileName(m.profileId||'')||'Unknown'} • ${when}</div>`;
       row.appendChild(avatar); row.appendChild(bubble);
       list.appendChild(row);
     });
@@ -624,18 +719,19 @@ async function sendComment(){
 /* Bootstrap */
 function drawUI(){
   renderProfiles();
-  renderVoting();
+  if(!document.getElementById('tab-voting').classList.contains('hidden')) renderVoting();
   if(!document.getElementById('tab-calendar').classList.contains('hidden')) renderCalendarUI();
   if(!document.getElementById('tab-comments').classList.contains('hidden')) renderCommentLegend();
+  if(!document.getElementById('tab-suggestions').classList.contains('hidden')) renderSuggestions();
   updateWho();
 }
 window.initMap = async function(){ try { mapSetup(); await cloudLoad(); drawUI(); } catch(e){ console.error(e); } };
 
 /* Expose globals */
 Object.assign(window,{
-  addProfile:addProfile, addStop:addStop, drawRoute:drawRoute, deleteProfile:deleteProfile, switchTab:switchTab,
-  toggleVote:toggleVote, calNav:calNav, claimProfile:claimProfile, setOrChangePin:setOrChangePin,
-  sendComment:sendComment, selectMyProfile:selectMyProfile
+  addProfile, addStop, drawRoute, deleteProfile, switchTab,
+  toggleVote, calNav, claimProfile, setOrChangePin,
+  sendComment, selectMyProfile, addSuggestion
 });
 </script>
 
