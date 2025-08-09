@@ -51,7 +51,7 @@
   .dot{width:.7rem;height:.7rem;border-radius:50%;border:1px solid rgba(0,0,0,.15)}
   .badge{position:absolute;top:.25rem;right:.25rem;min-width:1.2rem;padding:.02rem .3rem;border-radius:1rem;background:#ffe5d1;border:1px solid #f1d5c0;text-align:center;font-size:.7rem;color:#555}
   .legend{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.75rem}
-  .chip{display:inline-flex;align-items:center;gap:.35rem;padding:.25rem .5rem;border-radius:1rem;border:1px solid #ddd;background:#fff;cursor:pointer}
+  .chip{display:inline-flex;align-items:center;gap:.35rem;padding:.25rem .5rem;border:1px solid #ddd;background:#fff;border-radius:1rem;cursor:pointer}
   .chip.active{outline:2px solid var(--accent); outline-offset:1px}
   .chip .dot{width:.6rem;height:.6rem}
   .cal-help{font-size:.9rem;color:#555}
@@ -131,7 +131,7 @@
   </section>
 
   <div class="map-wrap"><div id="sharedMap" style="height:100%"></div></div>
-  <div id="routeSummary" style="margin-top:.5rem;font-weight:600;color:var(--accent)"></div>
+  <div id="routeSummary" style="margin-top:.5rem;font-weight:600;color:#0088cc"></div>
 </main>
 
 <footer>Made with ❤ in Chennai — data shared via Firebase</footer>
@@ -154,14 +154,16 @@ const app = initializeApp(firebaseConfig);
 const db  = getFirestore(app);
 const auth = getAuth(app);
 const globalRef = doc(db,"planner","global");
-const commentsCol = collection(db,"comments");
-
+const commentsCol = collection(globalRef, "comments");
 /* State */
 let uid = null;
-let state = { profiles: [], votes: {}, avails: {} };
+let state = { profiles: [], votes: {}, avails: {}, owners: {} };
 let myPid = null;
 const CHENNAI = {lat:13.0827,lng:80.2707};
-const colour  = id => `hsl(${parseInt(id.slice(-4),10)%360},70%,80%)`;
+
+/* Colors — persisted per profile (no collisions) */
+function paletteHueAt(i,total){ return Math.round((i * 360/Math.max(total,1)) % 360); }
+function colour(pid){ const p = profileById(pid); return p?.color || 'hsl(0,0%,80%)'; }
 
 /* Helpers */
 const pad = n => n<10 ? '0'+n : ''+n;
@@ -181,6 +183,8 @@ function ownersOf(pid){
   if (!p) return [];
   if (!p.owners && p.claimedBy) p.owners = [p.claimedBy]; // migrate legacy
   if (!Array.isArray(p.owners)) p.owners = [];
+  if (!state.owners) state.owners = {};
+  state.owners[pid] = p.owners; // mirror for Rules
   return p.owners;
 }
 function iOwn(pid){ return ownersOf(pid).includes(uid); }
@@ -194,13 +198,10 @@ onAuthStateChanged(auth, async user=>{
   loadMyPid();
   await cloudLoad();
 
-  // Auto-select owned profile on load, and bind device lock if missing
+  // Auto-select owned profile on load & bind device lock if missing
   if (!myPid) {
     const mine = state.profiles.find(p => ownersOf(p.id).includes(uid));
-    if (mine) {
-      myPid = mine.id; saveMyPid();
-      if (!getDeviceClaimedPid()) setDeviceClaimedPid(mine.id);
-    }
+    if (mine) { myPid = mine.id; saveMyPid(); if (!getDeviceClaimedPid()) setDeviceClaimedPid(mine.id); }
   }
 
   drawUI();
@@ -212,11 +213,22 @@ async function cloudLoad(){
   const s=await getDoc(globalRef);
   if(s.exists()){
     const d=s.data();
-    state = { profiles: d.profiles||[], votes: d.votes||{}, avails: d.avails||{} };
+    state = { profiles:d.profiles||[], votes:d.votes||{}, avails:d.avails||{}, owners:d.owners||{} };
+    ensureProfileColours();
   }
 }
 const cloudSave = ()=> setDoc(globalRef,state);
-onSnapshot(globalRef,s=>{ if(s.exists()){ const d=s.data(); state={profiles:d.profiles||[],votes:d.votes||{},avails:d.avails||{}}; drawUI(); }});
+onSnapshot(globalRef,s=>{ if(s.exists()){ const d=s.data(); state={profiles:d.profiles||[],votes:d.votes||{},avails:d.avails||{}, owners:d.owners||{}}; ensureProfileColours(); drawUI(); }});
+
+/* Assign stable, unique colours (persist) */
+function ensureProfileColours(){
+  let changed=false;
+  const total = state.profiles.length;
+  state.profiles.forEach((p, idx)=>{
+    if(!p.color){ p.color = `hsl(${paletteHueAt(idx,total)},70%,75%)`; changed=true; }
+  });
+  if(changed) cloudSave();
+}
 
 /* Claiming & PIN (multi-device allowed with PIN; one device => one profile) */
 async function claimProfile(pid){
@@ -228,22 +240,16 @@ async function claimProfile(pid){
     return;
   }
 
-  if (!Array.isArray(p.owners)) {
-    p.owners = [];
-    if (p.claimedBy && !p.owners.includes(p.claimedBy)) p.owners.push(p.claimedBy);
-  }
+  if (!Array.isArray(p.owners)) { p.owners = []; if (p.claimedBy && !p.owners.includes(p.claimedBy)) p.owners.push(p.claimedBy); }
 
-  if (p.owners.includes(uid)) {
-    setDeviceClaimedPid(pid);
-    selectMyProfile(pid);
-    return;
-  }
+  if (p.owners.includes(uid)) { setDeviceClaimedPid(pid); selectMyProfile(pid); return; }
 
   if (p.owners.length === 0) {
     const pin = prompt(`Set a PIN for "${p.name}" (4–10 chars):`);
     if (!pin || pin.length < 4) return alert('PIN too short.');
     p.pin = pin;
     p.owners.push(uid);
+    if (!state.owners) state.owners = {}; state.owners[pid] = p.owners;
     await cloudSave();
     setDeviceClaimedPid(pid);
     selectMyProfile(pid);
@@ -254,15 +260,17 @@ async function claimProfile(pid){
   if (!entered || entered !== p.pin) return alert('Incorrect PIN');
 
   p.owners.push(uid);
+  if (!state.owners) state.owners = {}; state.owners[pid] = p.owners;
   await cloudSave();
   setDeviceClaimedPid(pid);
   selectMyProfile(pid);
 }
 
-/* Select without prompting (when you already own it) */
+/* Select without prompting; also apply device lock if empty */
 function selectMyProfile(pid){
   myPid = pid;
   saveMyPid();
+  if (!getDeviceClaimedPid()) setDeviceClaimedPid(pid);
   updateWho();
   renderProfiles();
   renderVoting();
@@ -299,7 +307,9 @@ function updateWho(){
 /* Profiles */
 function addProfile(){
   const name=prompt('Profile name'); if(!name)return;
-  state.profiles.push({id:'p'+Date.now(),name,stops:[], claimedBy:null, owners:[], pin:null});
+  const id='p'+Date.now();
+  state.profiles.push({id,name,stops:[], claimedBy:null, owners:[], pin:null, color:`hsl(${paletteHueAt(state.profiles.length, state.profiles.length+1)},70%,75%)`});
+  if(!state.owners) state.owners={}; state.owners[id]=[];
   cloudSave(); drawUI();
 }
 function deleteProfile(id){
@@ -308,6 +318,7 @@ function deleteProfile(id){
     if(state.avails[d]?.[id]) delete state.avails[d][id];
     if(Object.keys(state.avails[d]).length===0) delete state.avails[d];
   });
+  if(state.owners) delete state.owners[id];
   if(myPid===id) { myPid=null; saveMyPid(); clearDeviceClaimIf(id); }
   cloudSave(); drawUI();
 }
@@ -360,11 +371,8 @@ function renderProfiles(){
 
 /* Stops (no alert during restore) */
 function addStop(pid, val = '', silent = false){
-  const isRestore = !!silent;                 // restoring existing stops on load
-  if (!iOwn(pid) && !isRestore) {             // only block user-initiated adds
-    alert('Claim this profile to edit.');
-    return;
-  }
+  const isRestore = !!silent;
+  if (!iOwn(pid) && !isRestore) { alert('Claim this profile to edit.'); return; }
   const inp = document.getElementById(pid+'-stop');
   const text = val || inp?.value.trim(); if (!text) return;
 
@@ -406,10 +414,7 @@ function drawRoute(pid){
     return alert("This profile hasn't set start, end, and at least one stop yet.");
   }
 
-  if(iOwn(pid)){
-    Object.assign(p, { start, end, stops });
-    cloudSave();
-  }
+  if(iOwn(pid)){ Object.assign(p, { start, end, stops }); cloudSave(); }
 
   svc.route({
     origin: start,
@@ -634,7 +639,7 @@ Object.assign(window,{
 });
 </script>
 
-<!-- Google Maps loader (kept the same key) -->
+<!-- Google Maps loader -->
 <script defer
   src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAyb1r4lm4HGtyr2nEOuVL-kSdyEosZVh4&libraries=places&callback=initMap"></script>
 </body>
