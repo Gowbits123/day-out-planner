@@ -315,18 +315,27 @@ function renderProfiles(){
 }
 
 /* Stops */
-function addStop(pid,val='',silent=false){
-  if(!iOwn(pid)) return alert('Claim this profile to edit.');
-  const inp=document.getElementById(pid+'-stop');
-  const text=val||inp?.value.trim(); if(!text)return;
-  const li=document.createElement('li'); li.className='place-item'; li.textContent=text;
-  li.append(btn('↑',()=>{if(li.previousElementSibling) li.parentNode.insertBefore(li,li.previousElementSibling); saveStops(pid);}),
-            btn('↓',()=>{if(li.nextElementSibling)     li.parentNode.insertBefore(li.nextElementSibling,li); saveStops(pid);}),
-            btn('✖',()=>{li.remove(); saveStops(pid);} ));
+function addStop(pid, val = '', silent = false){
+  const isRestore = !!silent;                 // restoring existing stops on load
+  if (!iOwn(pid) && !isRestore) {             // only block user-initiated adds
+    alert('Claim this profile to edit.');
+    return;
+  }
+  const inp = document.getElementById(pid+'-stop');
+  const text = val || inp?.value.trim(); if (!text) return;
+
+  const li = document.createElement('li'); li.className='place-item'; li.textContent = text;
+  li.append(
+    btn('↑',()=>{ if(li.previousElementSibling) li.parentNode.insertBefore(li, li.previousElementSibling); saveStops(pid); }),
+    btn('↓',()=>{ if(li.nextElementSibling)     li.parentNode.insertBefore(li.nextElementSibling, li); saveStops(pid); }),
+    btn('✖',()=>{ li.remove(); saveStops(pid); })
+  );
   document.getElementById(pid+'-list').appendChild(li);
-  if(!silent && inp) inp.value='';
-  if(!silent) saveStops(pid);
+
+  if (!isRestore && inp) inp.value='';
+  if (!isRestore) saveStops(pid);             // don’t write during restore
 }
+
 const btn=(txt,fn)=>{const b=document.createElement('button');b.textContent=txt;b.className='icon';b.onclick=fn;return b;}
 const saveStops=pid=>{const p=profileById(pid); if(!p) return; p.stops=stopsOf(pid); cloudSave(); renderVoting();};
 
