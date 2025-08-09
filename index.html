@@ -33,6 +33,28 @@
   #votingContent th{background:#ffe5d1}
   .pac-container{z-index:10000 !important}
   footer{text-align:center;padding:.6rem;font-size:.85rem;color:#555}
+
+  /* ── Calendar styles ── */
+  .calendar-wrap{margin-top:1rem;background:#fff;border:2px solid var(--accent);border-radius:1rem;padding:1rem;box-shadow:0 4px 8px rgba(0,0,0,.06)}
+  .cal-toolbar{display:flex;gap:.5rem;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-wrap:wrap}
+  .cal-title{font-weight:800;color:var(--accent)}
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:.5rem}
+  .cal-dow{font-size:.85rem;color:#666;text-align:center}
+  .cal-day{background:#fff8ef;border:1px solid #f1d5c0;border-radius:.75rem;min-height:92px;padding:.45rem;display:flex;flex-direction:column;gap:.35rem;cursor:pointer;position:relative}
+  .cal-day.other-month{opacity:.45}
+  .cal-day .date-no{font-weight:700;color:#444}
+  .cal-day .dots{display:flex;flex-wrap:wrap;gap:.25rem;margin-top:auto}
+  .dot{width:.7rem;height:.7rem;border-radius:50%;border:1px solid rgba(0,0,0,.15)}
+  .badge{position:absolute;top:.35rem;right:.35rem;min-width:1.4rem;padding:.05rem .35rem;border-radius:1rem;background:#ffe5d1;border:1px solid #f1d5c0;text-align:center;font-size:.75rem;color:#555}
+  .legend{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.75rem}
+  .chip{display:inline-flex;align-items:center;gap:.35rem;padding:.25rem .6rem;border-radius:1rem;border:1px solid #ddd;background:#fff;cursor:pointer}
+  .chip.active{outline:2px solid var(--accent); outline-offset:1px}
+  .chip .dot{width:.6rem;height:.6rem}
+  .cal-help{font-size:.9rem;color:#555}
+  .cal-controls{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+  .mini-label{font-size:.85rem;color:#666}
+  .avatar{width:1rem;height:1rem;border-radius:50%;display:inline-block;vertical-align:middle;margin-right:.25rem;border:1px solid rgba(0,0,0,.15)}
+  .initial{font-size:.65rem;position:absolute;bottom:.35rem;right:.35rem;color:#888}
 </style>
 </head>
 <body>
@@ -41,6 +63,7 @@
   <nav>
     <button id="btnProfiles" class="active" onclick="switchTab('profiles')">Profiles</button>
     <button id="btnVoting"  onclick="switchTab('voting')">Voting</button>
+    <button id="btnCalendar" onclick="switchTab('calendar')">Calendar</button>
   </nav>
   <button onclick="addProfile()">➕ Add Profile</button>
 </header>
@@ -52,6 +75,24 @@
     <h2>Group Voting</h2>
     <p>Click 👍 under your name to vote for a place.</p>
     <div id="votingContent"></div>
+  </section>
+
+  <!-- Calendar Tab -->
+  <section id="tab-calendar" class="hidden">
+    <h2>Availability Calendar</h2>
+    <p class="cal-help">Everyone’s availability is visible at once. Click a legend chip to choose who you’re editing, then click dates to toggle.</p>
+    <div class="calendar-wrap">
+      <div class="cal-toolbar">
+        <div class="cal-controls">
+          <button id="calPrev">◀</button>
+          <div class="cal-title" id="calMonthTitle">Month YYYY</div>
+          <button id="calNext">▶</button>
+          <span class="mini-label" id="calEditWho"></span>
+        </div>
+      </div>
+      <div class="cal-grid" id="calGrid"></div>
+      <div class="legend" id="calLegend"></div>
+    </div>
   </section>
 
   <div class="map-wrap"><div id="sharedMap" style="height:100%"></div></div>
@@ -78,22 +119,28 @@ const db  = getFirestore(app);
 const docRef = doc(db,"planner","global");
 
 /* ───────── State & helpers ───────── */
-let state = { profiles: [], votes: {} };
+let state = { profiles: [], votes: {}, avails: {} }; // avails: { "YYYY-MM-DD": { [pid]: true } }
 const CHENNAI = {lat:13.0827,lng:80.2707};
 const colour  = id => `hsl(${parseInt(id.slice(-4),10)%360},70%,80%)`;
 const stopsOf = pid => [...document.querySelectorAll(`#${pid}-list li`)].map(li=>li.firstChild.nodeValue.trim());
 
-async function cloudLoad(){ const s=await getDoc(docRef); if(s.exists()) state=s.data(); }
+// Fun Tamil pop-culture emoji picker (deterministic by pid)
+const kolly = ['⭐','🎬','🎵','🕺','🔥','🥁','🎭','🎤','🎧','🎹'];
+const kollyIcon = pid => kolly[parseInt(pid.slice(-2),10)%kolly.length];
+
+/* persistence */
+async function cloudLoad(){ const s=await getDoc(docRef); if(s.exists()) state={ avails:{}, votes:{}, profiles:[], ...s.data() }; }
 const cloudSave = ()=> setDoc(docRef,state);
-onSnapshot(docRef,s=>{ if(s.exists()){ state=s.data(); drawUI(); }} );
+onSnapshot(docRef,s=>{ if(s.exists()){ state={ avails:{}, votes:{}, profiles:[], ...s.data() }; drawUI(); }} );
 
 /* ───────── Tabs ───────── */
 function switchTab(t){
-  ['profiles','voting'].forEach(n=>{
+  ['profiles','voting','calendar'].forEach(n=>{
     document.getElementById('tab-'+n).classList.toggle('hidden',t!==n);
     document.getElementById('btn'+n.charAt(0).toUpperCase()+n.slice(1)).classList.toggle('active',t===n);
   });
   if(t==='voting') renderVoting();
+  if(t==='calendar') renderCalendarUI();
 }
 
 /* ───────── Profiles ───────── */
@@ -103,10 +150,17 @@ function addProfile(){
   cloudSave(); drawUI();
 }
 function deleteProfile(id){
-  state.profiles=state.profiles.filter(p=>p.id!==id); state.votes={}; cloudSave(); drawUI();
+  state.profiles=state.profiles.filter(p=>p.id!==id); state.votes={};
+  // Clean availability for deleted profile
+  Object.keys(state.avails||{}).forEach(d=>{
+    if(state.avails[d] && state.avails[d][id]) delete state.avails[d][id];
+    if(state.avails[d] && Object.keys(state.avails[d]).length===0) delete state.avails[d];
+  });
+  if(activeEditor===id) activeEditor = state.profiles[0]?.id || null;
+  cloudSave(); drawUI();
 }
 
-/* renderProfiles was missing → added back */
+/* renderProfiles */
 function renderProfiles(){
   const area=document.getElementById('profilesArea'); area.innerHTML='';
   state.profiles.forEach(p=>{
@@ -161,7 +215,7 @@ function drawRoute(pid){
   const stops=stopsOf(pid);
   if(!start||!end||stops.length===0){alert('Fill start, end & ≥1 stop');return;}
   Object.assign(p,{start,end,stops}); cloudSave();
-  svc.route({origin:start,destination:end,
+  svc.route({origin:start,destination=end,
              waypoints:stops.map(s=>({location:s,stopover:true})),
              travelMode:'DRIVING'},(res,status)=>{
     if(status!=='OK') return alert('Directions failed: '+status);
@@ -200,8 +254,125 @@ const toggleVote=(place,pid)=>{
 };
 const cnt=(o,val)=>Object.values(o).filter(x=>x===val).length;
 
+/* ───────── Calendar ───────── */
+let calCurrent = new Date();     // shown month
+let activeEditor = null;         // profile being edited (highlighted chip)
+
+function renderCalendarUI(){
+  // set default editor if needed
+  if(!activeEditor) activeEditor = state.profiles[0]?.id || null;
+
+  // wire month nav
+  document.getElementById('calPrev').onclick=()=>{ calCurrent.setMonth(calCurrent.getMonth()-1); drawCalendar(); };
+  document.getElementById('calNext').onclick=()=>{ calCurrent.setMonth(calCurrent.getMonth()+1); drawCalendar(); };
+
+  // build legend with clickable chips (also shows everyone at once)
+  const leg = document.getElementById('calLegend'); leg.innerHTML='';
+  state.profiles.forEach(p=>{
+    const chip=document.createElement('span'); chip.className='chip'+(activeEditor===p.id?' active':'');
+    const d=document.createElement('span'); d.className='dot'; d.style.background=colour(p.id);
+    const av=document.createElement('span'); av.className='avatar'; av.style.background=colour(p.id);
+    chip.appendChild(d);
+    chip.appendChild(document.createTextNode(' '+kollyIcon(p.id)+' '+p.name));
+    chip.onclick=()=>{ activeEditor=p.id; drawCalendar(); };
+    leg.appendChild(chip);
+  });
+
+  document.getElementById('calEditWho').textContent = activeEditor ? `Editing: ${profileName(activeEditor)}` : '';
+
+  drawCalendar();
+}
+
+function drawCalendar(){
+  const grid=document.getElementById('calGrid');
+  const title=document.getElementById('calMonthTitle');
+  grid.innerHTML='';
+
+  const y=calCurrent.getFullYear(), m=calCurrent.getMonth();
+  const monthStart=new Date(y,m,1);
+  const monthEnd=new Date(y,m+1,0);
+  const startDay=(monthStart.getDay()+6)%7; // Monday=0
+  const totalDays=monthEnd.getDate();
+
+  title.textContent = monthStart.toLocaleString(undefined,{month:'long', year:'numeric'});
+
+  // DOW header
+  const dows=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  dows.forEach(d=>{ const el=document.createElement('div'); el.className='cal-dow'; el.textContent=d; grid.appendChild(el); });
+
+  // leading from prev month
+  const prevDays = startDay;
+  if(prevDays>0){
+    const prevEnd = new Date(y,m,0).getDate();
+    for(let i=prevDays-1;i>=0;i--) grid.appendChild(makeDayCell(new Date(y,m-1,prevEnd-i), true));
+  }
+  // current month
+  for(let d=1; d<=totalDays; d++) grid.appendChild(makeDayCell(new Date(y,m,d), false));
+  // trailing to complete grid
+  const cellsSoFar = 7 + prevDays + totalDays;
+  const trailing = (7*7 - cellsSoFar % 7) % 7;
+  for(let i=1;i<=trailing;i++) grid.appendChild(makeDayCell(new Date(y,m+1,i), true));
+}
+
+function makeDayCell(dateObj, otherMonth){
+  const cell=document.createElement('div');
+  cell.className='cal-day' + (otherMonth ? ' other-month':'');
+  const dateStr = formatDate(dateObj);
+
+  const no=document.createElement('div'); no.className='date-no'; no.textContent = dateObj.getDate();
+  const dots=document.createElement('div'); dots.className='dots';
+
+  // Show dots/initials for ALL profiles who are free on this date
+  const dayAv = state.avails?.[dateStr] || {};
+  const freePids = Object.keys(dayAv).filter(pid=>dayAv[pid]);
+  freePids.forEach(pid=>{
+    const d=document.createElement('span'); d.className='dot'; d.title=profileName(pid);
+    d.style.background=colour(pid);
+    dots.appendChild(d);
+  });
+
+  // Tiny count badge (everyone visible at once)
+  if(freePids.length){
+    const badge=document.createElement('div'); badge.className='badge'; badge.textContent=freePids.length;
+    cell.appendChild(badge);
+  }
+
+  // optional tiny initial for editor (visual cue)
+  if(activeEditor){
+    const init=document.createElement('div'); init.className='initial';
+    init.textContent = (profileName(activeEditor)||'?').slice(0,2).toUpperCase();
+    cell.appendChild(init);
+  }
+
+  cell.appendChild(no);
+  cell.appendChild(dots);
+
+  // Clicking toggles availability for the ACTIVE editor only; view remains multi-user
+  cell.onclick = ()=>{
+    if(!activeEditor){ alert('Please add a profile first'); return; }
+    toggleAvailability(dateStr, activeEditor);
+  };
+
+  return cell;
+}
+
+function toggleAvailability(dateStr, pid){
+  if(!state.avails) state.avails = {};
+  if(!state.avails[dateStr]) state.avails[dateStr] = {};
+  state.avails[dateStr][pid] = !state.avails[dateStr][pid];
+  if(!state.avails[dateStr][pid]) delete state.avails[dateStr][pid];
+  if(Object.keys(state.avails[dateStr]).length===0) delete state.avails[dateStr];
+
+  cloudSave();
+  drawCalendar();
+}
+
+const profileName = (pid)=> state.profiles.find(p=>p.id===pid)?.name || 'Unknown';
+const pad = n => (n<10?'0'+n:n);
+const formatDate = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+
 /* ───────── Bootstrap ───────── */
-function drawUI(){ renderProfiles(); renderVoting(); }
+function drawUI(){ renderProfiles(); renderVoting(); /* calendar updates when tab opens or state changes */ }
 window.initMap = async ()=>{ mapSetup(); await cloudLoad(); drawUI(); };
 
 /* expose for HTML */
@@ -213,4 +384,3 @@ Object.assign(window,{addProfile,addStop,drawRoute,deleteProfile,switchTab,toggl
   src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAyb1r4lm4HGtyr2nEOuVL-kSdyEosZVh4&libraries=places&callback=initMap"></script>
 </body>
 </html>
-
