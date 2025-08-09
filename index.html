@@ -125,7 +125,7 @@
       <div class="chat-list" id="chatList"></div>
       <div class="chat-input">
         <input id="chatText" placeholder="Write a note…">
-        <button onclick="sendComment()">Post</button>
+        <button id="chatPostBtn" onclick="sendComment()">Post</button>
       </div>
     </div>
   </section>
@@ -169,7 +169,21 @@ const formatDate = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDa
 const stopsOf = pid => [...document.querySelectorAll(`#${pid}-list li`)].map(li=>li.firstChild.nodeValue.trim());
 function profileById(pid){ return state.profiles.find(p=>p.id===pid); }
 function profileName(pid){ return profileById(pid)?.name || 'Unknown'; }
-function iOwn(pid){ return !!(profileById(pid)?.claimedBy===uid); }
+
+/* ---- Multi-device with PIN; one-device-one-profile lock ---- */
+const DEVICE_LOCK_KEY = 'deviceClaimedPid';
+const getDeviceClaimedPid = () => { try { return localStorage.getItem(DEVICE_LOCK_KEY); } catch { return null; } };
+const setDeviceClaimedPid = (pid) => { try { localStorage.setItem(DEVICE_LOCK_KEY, pid); } catch {} };
+const clearDeviceClaimIf = (pid) => { try { if (localStorage.getItem(DEVICE_LOCK_KEY) === pid) localStorage.removeItem(DEVICE_LOCK_KEY); } catch {} };
+
+function ownersOf(pid){
+  const p = profileById(pid);
+  if (!p) return [];
+  if (!p.owners && p.claimedBy) p.owners = [p.claimedBy]; // migrate legacy
+  if (!Array.isArray(p.owners)) p.owners = [];
+  return p.owners;
+}
+function iOwn(pid){ return ownersOf(pid).includes(uid); }
 function loadMyPid(){ try{ myPid = localStorage.getItem('myPid')||null; }catch(e){} }
 function saveMyPid(){ try{ myPid ? localStorage.setItem('myPid', myPid) : localStorage.removeItem('myPid'); }catch(e){} }
 
@@ -179,6 +193,16 @@ onAuthStateChanged(auth, async user=>{
   uid = user.uid;
   loadMyPid();
   await cloudLoad();
+
+  // Auto-select owned profile on load, and bind device lock if missing
+  if (!myPid) {
+    const mine = state.profiles.find(p => ownersOf(p.id).includes(uid));
+    if (mine) {
+      myPid = mine.id; saveMyPid();
+      if (!getDeviceClaimedPid()) setDeviceClaimedPid(mine.id);
+    }
+  }
+
   drawUI();
   startCommentsLive();
 });
@@ -194,33 +218,48 @@ async function cloudLoad(){
 const cloudSave = ()=> setDoc(globalRef,state);
 onSnapshot(globalRef,s=>{ if(s.exists()){ const d=s.data(); state={profiles:d.profiles||[],votes:d.votes||{},avails:d.avails||{}}; drawUI(); }});
 
-/* Claiming & PIN */
+/* Claiming & PIN (multi-device allowed with PIN; one device => one profile) */
 async function claimProfile(pid){
   const p = profileById(pid); if(!p) return alert('Profile not found');
-  if(p.claimedBy && p.claimedBy!==uid) {
-    const pin = prompt(`"${p.name}" is already claimed.\nEnter PIN to switch ownership:`);
-    if(!pin) return;
-    if(!p.pin || pin !== p.pin) return alert('Incorrect PIN');
-  } else if(p.claimedBy===uid){
-    // already yours → just select it
+
+  const devicePid = getDeviceClaimedPid();
+  if (devicePid && devicePid !== pid) {
+    alert(`This device is already tied to "${profileName(devicePid)}".\nOne device can use only one profile.`);
+    return;
+  }
+
+  if (!Array.isArray(p.owners)) {
+    p.owners = [];
+    if (p.claimedBy && !p.owners.includes(p.claimedBy)) p.owners.push(p.claimedBy);
+  }
+
+  if (p.owners.includes(uid)) {
+    setDeviceClaimedPid(pid);
     selectMyProfile(pid);
     return;
-  } else {
-    if(!p.pin){
-      const pin = prompt(`Set a PIN for "${p.name}" (4–10 chars):`);
-      if(!pin || pin.length<4) return alert('PIN too short.');
-      p.pin = pin;
-    } else {
-      const pin = prompt(`Enter PIN for "${p.name}":`);
-      if(!pin || pin !== p.pin) return alert('Incorrect PIN');
-    }
   }
-  p.claimedBy = uid;
+
+  if (p.owners.length === 0) {
+    const pin = prompt(`Set a PIN for "${p.name}" (4–10 chars):`);
+    if (!pin || pin.length < 4) return alert('PIN too short.');
+    p.pin = pin;
+    p.owners.push(uid);
+    await cloudSave();
+    setDeviceClaimedPid(pid);
+    selectMyProfile(pid);
+    return;
+  }
+
+  const entered = prompt(`Enter PIN for "${p.name}" to use it on this device:`);
+  if (!entered || entered !== p.pin) return alert('Incorrect PIN');
+
+  p.owners.push(uid);
   await cloudSave();
+  setDeviceClaimedPid(pid);
   selectMyProfile(pid);
 }
 
-/* NEW: select without prompting (used when you already own it) */
+/* Select without prompting (when you already own it) */
 function selectMyProfile(pid){
   myPid = pid;
   saveMyPid();
@@ -233,11 +272,10 @@ function selectMyProfile(pid){
 
 async function setOrChangePin(pid){
   const p = profileById(pid); if(!p) return;
-  if(p.claimedBy && p.claimedBy!==uid) return alert('Only the current owner can change the PIN.');
+  if(!iOwn(pid)) return alert('Only an existing owner can change the PIN.');
   const pin = prompt(`Set/Change PIN for "${p.name}" (4–10 chars):`, p.pin||'');
   if(!pin || pin.length<4) return alert('PIN too short.');
   p.pin = pin;
-  if(!p.claimedBy) p.claimedBy = uid;
   await cloudSave();
   alert('PIN updated.');
 }
@@ -261,7 +299,7 @@ function updateWho(){
 /* Profiles */
 function addProfile(){
   const name=prompt('Profile name'); if(!name)return;
-  state.profiles.push({id:'p'+Date.now(),name,stops:[], claimedBy:null, pin:null});
+  state.profiles.push({id:'p'+Date.now(),name,stops:[], claimedBy:null, owners:[], pin:null});
   cloudSave(); drawUI();
 }
 function deleteProfile(id){
@@ -270,25 +308,30 @@ function deleteProfile(id){
     if(state.avails[d]?.[id]) delete state.avails[d][id];
     if(Object.keys(state.avails[d]).length===0) delete state.avails[d];
   });
-  if(myPid===id) { myPid=null; saveMyPid(); }
+  if(myPid===id) { myPid=null; saveMyPid(); clearDeviceClaimIf(id); }
   cloudSave(); drawUI();
 }
 function renderProfiles(){
   const area=document.getElementById('profilesArea'); area.innerHTML='';
   state.profiles.forEach(p=>{
     const owned = iOwn(p.id);
+    const devicePid = getDeviceClaimedPid();
+    const deviceLockedDifferent = devicePid && devicePid !== p.id;
+
     const card=document.createElement('div'); card.className='profile-card'; card.id=p.id;
     card.style.borderColor = colour(p.id);
 
-    const useOrClaimBtn = owned
+    const claimBtnHtml = owned
       ? `<button onclick="selectMyProfile('${p.id}')">Use on this device</button>`
-      : `<button onclick="claimProfile('${p.id}')" style="background:#4caf50">Claim this profile</button>`;
+      : (deviceLockedDifferent
+          ? `<button disabled class="lock" title="This device is tied to '${profileName(devicePid)}'">Claim this profile</button>`
+          : `<button onclick="claimProfile('${p.id}')" style="background:#4caf50">Claim this profile</button>`);
 
     card.innerHTML=`
       <button class="delete-profile" onclick="deleteProfile('${p.id}')">×</button>
       <h3>${p.name}</h3>
       <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.5rem">
-        ${useOrClaimBtn}
+        ${claimBtnHtml}
         <button onclick="setOrChangePin('${p.id}')" class="${owned?'':'lock'}">Set/Change PIN</button>
       </div>
       <label>Start <input id="${p.id}-start" value="${p.start||''}" ${owned?'':'disabled'}></label><br/>
@@ -296,7 +339,8 @@ function renderProfiles(){
       <div class="place-item"><input id="${p.id}-stop" placeholder="Add stop" ${owned?'':'disabled'}>
         <button ${owned?'':'disabled'} onclick="addStop('${p.id}')">▶</button></div>
       <ul id="${p.id}-list"></ul>
-      <button ${owned?'':'disabled'} class="${owned?'':'lock'}" onclick="drawRoute('${p.id}')">Show Route</button>`;
+      <!-- Always enabled so anyone can preview the route -->
+      <button onclick="drawRoute('${p.id}')">Show Route</button>`;
     area.appendChild(card);
 
     (p.stops||[]).forEach(s=>addStop(p.id,s,true));
@@ -314,7 +358,7 @@ function renderProfiles(){
   });
 }
 
-/* Stops */
+/* Stops (no alert during restore) */
 function addStop(pid, val = '', silent = false){
   const isRestore = !!silent;                 // restoring existing stops on load
   if (!iOwn(pid) && !isRestore) {             // only block user-initiated adds
@@ -333,9 +377,8 @@ function addStop(pid, val = '', silent = false){
   document.getElementById(pid+'-list').appendChild(li);
 
   if (!isRestore && inp) inp.value='';
-  if (!isRestore) saveStops(pid);             // don’t write during restore
+  if (!isRestore) saveStops(pid);
 }
-
 const btn=(txt,fn)=>{const b=document.createElement('button');b.textContent=txt;b.className='icon';b.onclick=fn;return b;}
 const saveStops=pid=>{const p=profileById(pid); if(!p) return; p.stops=stopsOf(pid); cloudSave(); renderVoting();};
 
@@ -347,24 +390,39 @@ function mapSetup(){
   svc=new google.maps.DirectionsService();
   rend=new google.maps.DirectionsRenderer({map});
 }
+
+/* Anyone can view routes; owners write back */
 function drawRoute(pid){
   if(!(window.google?.maps && svc && rend)) return alert('Map not ready');
-  if(!iOwn(pid)) return alert('Claim this profile to draw its route.');
-  const p=profileById(pid);
-  const start=document.getElementById(pid+'-start').value.trim();
-  const end=document.getElementById(pid+'-end').value.trim();
-  const stops=stopsOf(pid);
-  if(!start||!end||stops.length===0){alert('Fill start, end & ≥1 stop');return;}
-  Object.assign(p,{start,end,stops}); cloudSave();
-  svc.route({origin:start,destination:end,
-             waypoints:stops.map(s=>({location:s,stopover:true})),
-             travelMode:'DRIVING'},(res,status)=>{
+
+  const p = profileById(pid);
+  if(!p) return alert('Profile not found');
+
+  const start = p.start || document.getElementById(pid+'-start')?.value?.trim();
+  const end   = p.end   || document.getElementById(pid+'-end')  ?.value?.trim();
+  const stops = Array.isArray(p.stops) && p.stops.length ? p.stops : stopsOf(pid);
+
+  if(!start || !end || !stops || !stops.length){
+    return alert("This profile hasn't set start, end, and at least one stop yet.");
+  }
+
+  if(iOwn(pid)){
+    Object.assign(p, { start, end, stops });
+    cloudSave();
+  }
+
+  svc.route({
+    origin: start,
+    destination: end,
+    waypoints: stops.map(s => ({ location: s, stopover: true })),
+    travelMode: 'DRIVING'
+  }, (res, status) => {
     if(status!=='OK') return alert('Directions failed: '+status);
     rend.setDirections(res);
-    const legs=res.routes[0].legs;
-    const dist=(legs.reduce((d,l)=>d+l.distance.value,0)/1000).toFixed(1);
-    const time=(legs.reduce((t,l)=>t+l.duration.value,0)/60).toFixed(0);
-    document.getElementById('routeSummary').textContent=
+    const legs = res.routes[0].legs;
+    const dist = (legs.reduce((d,l)=>d+l.distance.value,0)/1000).toFixed(1);
+    const time = (legs.reduce((t,l)=>t+l.duration.value,0)/60).toFixed(0);
+    document.getElementById('routeSummary').textContent =
       `${p.name}'s plan → ${dist} km | ${time} mins`;
     renderVoting();
   });
@@ -413,7 +471,6 @@ function renderCalendarUI(){
     chip.appendChild(d); chip.appendChild(document.createTextNode(' '+p.name));
     leg.appendChild(chip);
   });
-  // Delegated handler: select if owner, otherwise prompt to claim
   leg.onclick = (e)=>{
     const chip=e.target.closest('.chip'); if(!chip) return;
     const pid=chip.dataset.pid;
@@ -515,11 +572,12 @@ function renderCommentLegend(){
   leg.onclick = (e)=>{
     const chip=e.target.closest('.chip'); if(!chip) return;
     const pid=chip.dataset.pid;
-    if(iOwn(pid)) { selectMyProfile(pid); highlightLegend('commentLegend'); return; }
+    if(iOwn(pid)) { selectMyProfile(pid); highlightLegend('commentLegend'); updatePostButtonState(); return; }
     claimProfile(pid);
   };
   highlightLegend('commentLegend');
   document.getElementById('claimHint').textContent = myPid ? `Posting as ${profileName(myPid)}` : `Claim your profile to post.`;
+  updatePostButtonState();
 }
 function startCommentsLive(){
   if(unsubscribeComments) unsubscribeComments();
@@ -538,12 +596,24 @@ function startCommentsLive(){
     });
   });
 }
+function updatePostButtonState(){
+  const btn = document.getElementById('chatPostBtn');
+  if (!btn) return;
+  btn.disabled = !myPid;
+  btn.classList.toggle('lock', !myPid);
+}
 async function sendComment(){
   const inp=document.getElementById('chatText');
-  const text=inp.value.trim(); if(!text) return;
+  const text=inp.value.trim();
+  if(!text) return;
   if(!myPid) { alert('Claim your profile to post.'); return; }
-  await addDoc(commentsCol, { text, profileId: myPid, uid, ts: serverTimestamp() });
-  inp.value='';
+  try{
+    await addDoc(commentsCol, { text, profileId: myPid, uid, ts: serverTimestamp() });
+    inp.value='';
+  }catch(err){
+    console.error(err);
+    alert('Could not post: ' + (err?.message || err));
+  }
 }
 
 /* Bootstrap */
