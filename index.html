@@ -13,7 +13,7 @@
   nav button{margin:0 .25rem;padding:.4rem .8rem;border:none;border-radius:.6rem;background:#fff;
              color:var(--brand);font-weight:600;cursor:pointer}
   nav button.active{background:#ffe5d1;color:#000}
-  main{flex:1;max-width:1200px;margin:0 auto;padding:1rem}
+  main{max-width:1200px;margin:0 auto;padding:1rem;flex:1}
   .hidden{display:none}
 
   .profile-container{display:flex;flex-wrap:wrap;gap:1rem}
@@ -134,7 +134,7 @@ onSnapshot(docRef, s=>{
   if(s.exists()){
     const d = s.data();
     state = { profiles: d.profiles||[], votes: d.votes||{}, avails: d.avails||{} };
-    drawUI();
+    drawUI(); // now also refreshes calendar if visible
   }
 });
 
@@ -181,7 +181,7 @@ function renderProfiles(){
 
     (p.stops||[]).forEach(s=>addStop(p.id,s,true));
 
-    // Guard Places Autocomplete so failure doesn’t break the app
+    // Guard Places Autocomplete
     if (window.google && window.google.maps && window.google.maps.places){
       ["start","end","stop"].forEach(function(f){
         const el=document.getElementById(p.id+"-"+f);
@@ -279,10 +279,22 @@ function renderCalendarUI(){
     const d=document.createElement("span"); d.className="dot"; d.style.background=colour(p.id);
     chip.appendChild(d);
     chip.appendChild(document.createTextNode(" "+p.name));
-    chip.onclick=function(){ activeEditor=p.id; drawCalendar(); };
+    chip.onclick = function () {
+      activeEditor = p.id;
+      // update label
+      const label = document.getElementById('calEditWho');
+      if (label) label.textContent = 'Editing: ' + profileName(activeEditor);
+      // toggle active class on chips
+      document.querySelectorAll('#calLegend .chip').forEach(function(el){ el.classList.remove('active'); });
+      chip.classList.add('active');
+      // redraw
+      drawCalendar();
+    };
     leg.appendChild(chip);
   });
-  document.getElementById("calEditWho").textContent = activeEditor ? ("Editing: "+profileName(activeEditor)) : "";
+
+  const label = document.getElementById('calEditWho');
+  if (label) label.textContent = activeEditor ? ('Editing: ' + profileName(activeEditor)) : '';
 
   drawCalendar();
 }
@@ -366,10 +378,21 @@ function pad(n){ return n<10 ? "0"+n : ""+n; }
 function formatDate(d){ return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); }
 
 /* Bootstrap */
-function drawUI(){ renderProfiles(); renderVoting(); }
-window.initMap = async function(){ try { mapSetup(); await cloudLoad(); drawUI(); } catch(e){ console.error(e); } };
+function drawUI(){
+  renderProfiles();
+  renderVoting();
+  // NEW: if calendar tab is visible, refresh it too
+  const calTab = document.getElementById('tab-calendar');
+  if (calTab && !calTab.classList.contains('hidden')) {
+    renderCalendarUI();
+  }
+}
+window.initMap = async function(){
+  try { mapSetup(); await cloudLoad(); drawUI(); }
+  catch(e){ console.error(e); }
+};
 
-/* Expose globals WITHOUT shorthand (fixes your error) */
+/* Expose globals (explicit keys) */
 Object.assign(window,{
   addProfile: addProfile,
   addStop: addStop,
@@ -381,7 +404,7 @@ Object.assign(window,{
 });
 </script>
 
-<!-- Google Maps loader (kept the same key) -->
+<!-- Google Maps loader (same key as before) -->
 <script defer
   src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAyb1r4lm4HGtyr2nEOuVL-kSdyEosZVh4&libraries=places&callback=initMap"></script>
 </body>
